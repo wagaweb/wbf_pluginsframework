@@ -131,7 +131,7 @@ class BasePlugin {
 	 * @param string $dir
 	 * @param string $version
 	 */
-	public function __construct( $plugin_name, $dir, $version = "1.0.0" ) {
+	public function __construct( $plugin_name, $dir, $version = false ) {
 		$this->plugin_name = $plugin_name;
 		$this->plugin_dir  = $dir;
 		$this->plugin_path = $this->plugin_dir.$this->plugin_name.".php";
@@ -165,17 +165,29 @@ class BasePlugin {
 		}
 
 		//Get the version
-		if(function_exists("get_plugin_data")){
-			$pluginHeader = get_plugin_data($this->plugin_path, false, false);
-			if ( isset($pluginHeader['Version']) ) {
-				$this->version = $pluginHeader['Version'];
+		if(!$version){
+			$default_headers = array(
+				'Name' => 'Plugin Name',
+				'PluginURI' => 'Plugin URI',
+				'Version' => 'Version',
+				'Description' => 'Description',
+				'Author' => 'Author',
+				'AuthorURI' => 'Author URI',
+				'TextDomain' => 'Text Domain',
+				'DomainPath' => 'Domain Path',
+				'Network' => 'Network',
+				// Site Wide Only is deprecated in favor of Network.
+				'_sitewide' => 'Site Wide Only',
+			);
+			$data = \get_file_data($this->get_path(),$default_headers,"plugin");
+			if ( isset($data['Version']) ) {
+				$this->version = $data['Version'];
 			} else {
-				$this->version = $version;
+				$this->version = "1.0.0";
 			}
 		}else{
 			$this->version = $version;
 		}
-
 
 		//Check if debug mode must be activated
 		if( (defined("WP_DEBUG") && WP_DEBUG) || (defined("WBF_ENV") && WBF_ENV == "dev") ){
@@ -249,11 +261,11 @@ class BasePlugin {
 	 * @return void
 	 */
 	public function add_action_links($links = []){
-		$plugin_file = $this->plugin_name.'/'.$this->plugin_name;
-		add_action('plugin_action_links_'.$plugin_file.'.php', function($current_links) use($links){
+		$plugin_file = ltrim($this->plugin_relative_dir,"/").'/'.basename($this->plugin_path);
+		add_action('plugin_action_links_'.$plugin_file, function($current_links) use($links){
 			if(isset($links) && is_array($links)){
 				foreach ( $links as $link ) {
-					$current_links[] = '<a href="' . esc_url( get_admin_url( null, $link['link'] ) ) . '">' . $link['name'] . '</a>';
+					$current_links[sanitize_title_with_dashes($link['name'])] = '<a href="' . esc_url( get_admin_url( null, $link['link'] ) ) . '">' . $link['name'] . '</a>';
 				}
 			}
 			return $current_links;
@@ -589,19 +601,19 @@ class BasePlugin {
 	 * @return array with 'core', 'admin' and 'public' keys. Each keys is associated with respective classes.
 	 * @throws \Exception
 	 */
-	static function get_instances_of($plugin){
+	static function get_instances_of($plugin_name){
 		global $wbf_loaded_plugins;
-		if(isset($wbf_loaded_plugins[$plugin])){
-			$plugin = $wbf_loaded_plugins[$plugin];
-			$loader = $plugin->get_loader();
-			if($plugin && (isset($loader->public_plugin) || isset($loader->admin_plugin))){
+		if(isset($wbf_loaded_plugins[$plugin_name])){
+			$plugin = $wbf_loaded_plugins[$plugin_name];
+			if($plugin instanceof BasePlugin || $plugin instanceof TemplatePlugin){
+				$loader = $plugin->get_loader();
 				return [
 					'core' => $plugin,
 					'public' => isset($loader->public_plugin) ? $loader->public_plugin : false,
 					'admin' => isset($loader->admin_plugin) ? $loader->admin_plugin : false
 				];
 			}else{
-				throw new \Exception("Trying to get $plugin instances: module $plugin has no instances");
+				throw new \Exception("Trying to get $plugin_name instances: plugin $plugin_name has no instances");
 			}
 		}else{
 			return [];

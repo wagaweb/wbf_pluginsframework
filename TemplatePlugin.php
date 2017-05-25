@@ -41,9 +41,10 @@ class TemplatePlugin extends BasePlugin {
 		$this->loader->add_filter( 'wbf/locate_template/search_paths', $this, 'add_template_base_path', 10, 2 );
 		//Embedded support for WooCommerce
 		$this->wc_templates = array();
-		if(function_exists('is_woocommerce')){
-			$this->loader->add_filter( 'woocommerce_locate_template',$this,"override_wc_templates", 11, 3);
-		}
+		//if(function_exists('is_woocommerce')){
+			//$this->loader->add_filter( 'woocommerce_locate_template',$this,"override_wc_locate_templates", 11, 3);
+			$this->loader->add_filter( 'wc_get_template',$this,"override_wc_get_templates", 11, 5);
+		//}
 		//Embedded support for template wrappers
 		$this->loader->add_action( 'init', $this, "maybe_attach_wrapper", 20 );
 		//Just to be sure...
@@ -137,6 +138,27 @@ class TemplatePlugin extends BasePlugin {
 		if(!isset($path)){
 			$this->templates_paths[ $template_name ] = $this->get_src_dir()."templates/woocommerce/".$template_name;
 		}
+
+		//WE NEED A SPECIAL CASE FOR "archive-product.php" read on...
+		if($template_name == "archive-product.php"){
+			add_filter("template_include",function($template){
+				//WooCommerce hard code the archive-product.php template in template_include. See class-wc-template-loader.php
+				//We need to bypass this.
+				if(!function_exists('wc_get_page_id')) return $template; //return early if no WC is detected
+				if(is_post_type_archive('product') || is_page( wc_get_page_id('shop'))){ //For some reason this targets the SHOP PAGE
+					//This is a copy-paste from WC source:
+					$file 	= 'archive-product.php';
+					$find[] = $file;
+					$find[] = WC()->template_path() . $file;
+					$theme_template = locate_template( array_unique( $find ) );
+					if(!$theme_template && !WC_TEMPLATE_DEBUG_MODE && file_exists($this->templates_paths['archive-product.php'])){
+						$template = $this->templates_paths['archive-product.php']; //If no theme template was found, inject our template (if exists)
+					}
+				}
+				return $template;
+			},11);
+		}
+
 		return $this->wc_templates;
 	}
 
@@ -149,10 +171,12 @@ class TemplatePlugin extends BasePlugin {
 	 * @param $template_name
 	 * @param $template_path
 	 *
+	 * @deprecated in favor of override_wc_get_templates
+	 *
 	 * @return mixed
 	 */
-	public function override_wc_templates($template, $template_name, $template_path){
-		remove_filter("woocommerce_locate_template",[$this,"override_wc_templates"],11);
+	public function override_wc_locate_templates($template, $template_name, $template_path){
+		remove_filter("woocommerce_locate_template",[$this,"override_wc_locate_templates"],11);
 
 		//Check if theme has a template for current post\page
 		$file = wc_locate_template($template_name);
@@ -164,7 +188,38 @@ class TemplatePlugin extends BasePlugin {
 			return $file;
 		}
 
+		add_filter("woocommerce_locate_template",[$this,"override_wc_locate_templates"],11,3);
+
 		return $template;
+	}
+
+	/**
+	 * Inject templates into WC template hierarchy
+	 *
+	 * @hooked 'wc_get_template'
+	 *
+	 * @param $located
+	 * @param $template_name
+	 * @param $args
+	 * @param $template_path
+	 * @param $default_path
+	 *
+	 * @return mixed
+	 */
+	public function override_wc_get_templates($located, $template_name, $args, $template_path, $default_path){
+		if(in_array($template_name,$this->wc_templates)){
+			//Check if theme has a template for current post\page
+			$theme_dir = get_stylesheet_directory();
+			if(preg_match("|$theme_dir|",$located)){
+				return $located; //Return if the theme override the template
+			}
+			//Check if plugin has a template for current post\page
+			if(isset($this->templates_paths[ $template_name ]) && is_file($this->templates_paths[ $template_name ])){
+				$located = $this->templates_paths[ $template_name ];
+			}
+		}
+
+		return $located;
 	}
 
 	/**
@@ -213,7 +268,7 @@ class TemplatePlugin extends BasePlugin {
 
 		$required_tpl = get_post_meta( $post->ID, '_wp_page_template', true ); //Get the template set via wp editor
 
-		if($required_tpl == "" || !$required_tpl || !is_string($required_tpl)){
+		if($required_tpl == "" || $required_tpl == "default" || !$required_tpl || !is_string($required_tpl)){
 			$file = $this->locate_template_file_in_hierarchy();
 		}else{
 			$file = $this->locate_template_file($required_tpl);
@@ -383,13 +438,16 @@ class TemplatePlugin extends BasePlugin {
 	 * Gets the paths where template file can be looked for in themes
 	 */
 	private function get_directories_of_templates_in_theme(){
+		$stylesheet_dir = \get_stylesheet_directory();
+		$template_dir = \get_template_directory();
+
 		$directories = [
-			\get_stylesheet_directory()."/".$this->get_plugin_name(),
-			\get_stylesheet_directory()."/templates/".$this->get_plugin_name(),
-			\get_stylesheet_directory()."/templates/".$this->get_plugin_name()."/parts",
-			\get_template_directory()."/".$this->get_plugin_name(),
-			\get_template_directory()."/templates/".$this->get_plugin_name(),
-			\get_template_directory()."/templates/".$this->get_plugin_name()."/parts"
+			$stylesheet_dir."/".$this->get_plugin_name(),
+			$stylesheet_dir."/templates/".$this->get_plugin_name(),
+			$stylesheet_dir."/templates/".$this->get_plugin_name()."/parts",
+			$template_dir."/".$this->get_plugin_name(),
+			$template_dir."/templates/".$this->get_plugin_name(),
+			$template_dir."/templates/".$this->get_plugin_name()."/parts"
 		];
 
 		$directories = array_unique($directories);
